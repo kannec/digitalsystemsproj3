@@ -3,7 +3,13 @@
 
   const STORAGE_PINS = "inspo-cloud-pins-v1";
   const STORAGE_FOLDERS = "inspo-cloud-folders-v1";
-  const STORAGE_CAMERA = "inspo-cloud-camera-v1";
+  const STORAGE_CAMERA = "inspo-cloud-camera-v2";
+  const STORAGE_CAMERA_LEGACY = "inspo-cloud-camera-v1";
+
+  const PERSPECTIVE_PX = 1100;
+  const PIN_Z_SPREAD = 1000;
+  /** Initial dolly (negative = farther from content). Saved z overrides unless it was legacy 0. */
+  const START_DOLLY = -340;
 
   const PIN_DISPLAY_MAX_EDGE = 268;
   const PIN_DISPLAY_MIN_EDGE = 64;
@@ -134,9 +140,8 @@
 
   let pins = [];
   let folders = [];
-  let camera = { x: 0, y: 0, z: 1 };
-  let camTarget = { x: 0, y: 0, z: 1 };
-  let camAnimRaf = null;
+  let camera = { x: 0, y: 0, z: 0 };
+  let camTarget = { x: 0, y: 0, z: 0 };
   let selectedIds = new Set();
   let selectMode = false;
   let panning = null;
@@ -232,20 +237,112 @@
     return { x: pin.x, y: pin.y };
   }
 
+  function pinTranslateZ(pin) {
+    const d = ensurePinDepth(pin);
+    return (d - 0.5) * PIN_Z_SPREAD;
+  }
+
+  /** Zoom-out floor (wide view). Zoom-in cap = pass last depth layer, then a little slack. */
+  function getDollyBounds() {
+    const P = PERSPECTIVE_PX;
+    const passEnd = P - 20;
+    const list = pinsForView();
+    if (!list.length) {
+      return { min: -5200, max: passEnd + 320 };
+    }
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const pin of list) {
+      const z = pinTranslateZ(pin);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+    const maxDolly = passEnd - minZ + 280;
+    const minDolly = Math.min(-2200, passEnd - maxZ - P * 1.2);
+    return { min: minDolly, max: maxDolly };
+  }
+
+  function clampDolly(z) {
+    const b = getDollyBounds();
+    return Math.min(b.max, Math.max(b.min, z));
+  }
+
+  function clampCameraToBounds() {
+    const b = getDollyBounds();
+    camera.z = Math.min(b.max, Math.max(b.min, camera.z));
+    camTarget.z = Math.min(b.max, Math.max(b.min, camTarget.z));
+  }
+
+  /** Pan so the average pin position sits at the viewport origin (middle of the cloud). */
+  function centerCameraOnPins() {
+    if (!pins.length) {
+      camera.x = 0;
+      camera.y = 0;
+      return;
+    }
+    let sx = 0;
+    let sy = 0;
+    for (const pin of pins) {
+      sx += pin.x || 0;
+      sy += pin.y || 0;
+    }
+    const n = pins.length;
+    camera.x = -sx / n;
+    camera.y = -sy / n;
+  }
+
+  function migrateLegacyCameraToDolly(cam) {
+    let s = typeof cam.z === "number" ? cam.z : 0.92;
+    s = Math.max(0.06, Math.min(s, 9));
+    const dolly = (Math.log(s) - Math.log(0.92)) * 320;
+    return {
+      x: 0,
+      y: 0,
+      z: clampDolly(dolly),
+    };
+  }
+
+  function loadCamera() {
+    try {
+      const raw = localStorage.getItem(STORAGE_CAMERA);
+      if (raw) {
+        const c = JSON.parse(raw);
+        let z = typeof c.z === "number" ? c.z : START_DOLLY;
+        if (z === 0) z = START_DOLLY;
+        return {
+          x: 0,
+          y: 0,
+          z: clampDolly(z),
+        };
+      }
+    } catch {}
+    try {
+      const leg = localStorage.getItem(STORAGE_CAMERA_LEGACY);
+      if (leg) {
+        const migrated = migrateLegacyCameraToDolly(JSON.parse(leg));
+        localStorage.setItem(STORAGE_CAMERA, JSON.stringify(migrated));
+        return migrated;
+      }
+    } catch {}
+    return { x: 0, y: 0, z: clampDolly(START_DOLLY) };
+  }
+
   function load() {
     try {
       pins = JSON.parse(localStorage.getItem(STORAGE_PINS) || "[]");
       folders = JSON.parse(localStorage.getItem(STORAGE_FOLDERS) || "[]");
-      camera = JSON.parse(localStorage.getItem(STORAGE_CAMERA) || "null") || { x: 0, y: 0, z: 0.9 };
+      camera = loadCamera();
     } catch {
       pins = [];
       folders = [];
-      camera = { x: 0, y: 0, z: 0.9 };
+      camera = { x: 0, y: 0, z: START_DOLLY };
     }
     if (!Array.isArray(folders)) folders = [];
     migrateFolders();
     migratePinsMeta();
+    centerCameraOnPins();
     syncCamTarget();
+    clampCameraToBounds();
   }
 
   function persistPins() {
@@ -276,20 +373,44 @@
     return pin.depth;
   }
 
+  /** 1 → 0 as the pin crosses the eye plane (no solid volume — you see through to layers behind). */
+  function passThroughOpacity(zSum) {
+    const P = PERSPECTIVE_PX;
+    const start = P - 420;
+    const end = P - 20;
+    if (zSum <= start) return 1;
+    if (zSum >= end) return 0;
+    const u = (zSum - start) / (end - start);
+    return 1 - u * u;
+  }
+
   function applyPinParallax() {
     const list = pinsForView();
-    const zf = camera.z;
-    const swim = 1 + Math.min(0.5, Math.abs(zf - 0.9)) * 0.55;
-    let par = 0.14 * swim;
+    const swim = 1 + Math.min(0.85, Math.abs(camera.z) / 520) * 0.62;
+    let par = 0.16 * swim;
     if (focusedPinId) par *= 0.38;
+    const passThrough = !focusedPinId && !searchQuery.trim();
     list.forEach((pin) => {
       const node = pinsLayer.querySelector(`[data-id="${pin.id}"]`);
       if (!node) return;
       const d = ensurePinDepth(pin);
-      const z = (d - 0.52) * 360;
+      const z = (d - 0.5) * PIN_Z_SPREAD;
       const ox = (d - 0.55) * camera.x * par;
       const oy = (d - 0.55) * camera.y * par;
       node.style.transform = `translate3d(${ox.toFixed(2)}px,${oy.toFixed(2)}px,${z.toFixed(1)}px)`;
+
+      if (!passThrough) {
+        node.style.pointerEvents = "";
+        return;
+      }
+
+      const zSum = camera.z + z;
+      const passOp = passThroughOpacity(zSum);
+      const base = Math.max(0, Math.min(1, parseFloat(node.dataset.pinBaseOpacity || "1") || 1));
+      const finalOp = base * passOp;
+      node.style.opacity = String(finalOp);
+      node.style.zIndex = String(Math.max(1, Math.min(980, Math.round(240 + zSum * 0.4))));
+      node.style.pointerEvents = finalOp < 0.04 ? "none" : "";
     });
   }
 
@@ -299,36 +420,8 @@
     camTarget.z = camera.z;
   }
 
-  function stepCameraAnim() {
-    const k = 0.28;
-    camera.x += (camTarget.x - camera.x) * k;
-    camera.y += (camTarget.y - camera.y) * k;
-    camera.z += (camTarget.z - camera.z) * k;
-    applyWorldTransform();
-    applyPinParallax();
-    const settled =
-      Math.hypot(camTarget.x - camera.x, camTarget.y - camera.y) < 0.45 && Math.abs(camTarget.z - camera.z) < 0.005;
-    if (settled) {
-      camera.x = camTarget.x;
-      camera.y = camTarget.y;
-      camera.z = camTarget.z;
-      applyWorldTransform();
-      applyPinParallax();
-      camAnimRaf = null;
-      viewport.classList.remove("viewport--driving-camera");
-      persistCamera();
-      return;
-    }
-    camAnimRaf = requestAnimationFrame(stepCameraAnim);
-  }
-
-  function bumpCameraAnim() {
-    viewport.classList.add("viewport--driving-camera");
-    if (!camAnimRaf) camAnimRaf = requestAnimationFrame(stepCameraAnim);
-  }
-
   function applyWorldTransform() {
-    world.style.transform = `translate3d(${camera.x}px, ${camera.y}px, 0) scale(${camera.z})`;
+    world.style.transform = `translate3d(${camera.x}px, ${camera.y}px, ${camera.z}px)`;
   }
 
   function tagBucketKey(tag) {
@@ -726,7 +819,7 @@
     focusedPinId = pinId;
     searchQuery = "";
     searchInput.value = "";
-    camera = { x: 0, y: 0, z: 1.05 };
+    camera = { x: 0, y: 0, z: 0 };
     camTarget = { ...camera };
     applyWorldTransform();
     applyPinParallax();
@@ -800,6 +893,7 @@
       node.style.top = `${y - pin.h / 2}px`;
       node.style.width = `${pin.w}px`;
       node.style.height = `${pin.h}px`;
+      node.dataset.pinBaseOpacity = "1";
       node.style.opacity = "";
       node.style.zIndex = String(10 + (hashStr(pin.id) % 40));
       node.classList.remove("pin--ghost", "pin--focused");
@@ -826,6 +920,7 @@
       heroNode.style.top = `${cy - h / 2}px`;
       heroNode.style.width = `${w}px`;
       heroNode.style.height = `${h}px`;
+      heroNode.dataset.pinBaseOpacity = "1";
       heroNode.style.opacity = "1";
       heroNode.style.zIndex = "95";
       heroNode.classList.add("pin--focused");
@@ -848,6 +943,7 @@
       node.style.top = `${y - hh / 2}px`;
       node.style.width = `${ww}px`;
       node.style.height = `${hh}px`;
+      node.dataset.pinBaseOpacity = "0.26";
       node.style.opacity = "0.26";
       node.style.zIndex = String(4 + (hashStr(pin.id) % 8));
       node.classList.add("pin--ghost");
@@ -878,6 +974,7 @@
         node.style.top = `${y - pin.h / 2}px`;
         node.style.width = `${pin.w}px`;
         node.style.height = `${pin.h}px`;
+        node.dataset.pinBaseOpacity = "0.2";
         node.style.opacity = "0.2";
         node.style.zIndex = String(10 + (hashStr(pin.id) % 40));
         node.classList.add("pin--ghost");
@@ -908,6 +1005,7 @@
       node.style.top = `${y - h / 2}px`;
       node.style.width = `${w}px`;
       node.style.height = `${h}px`;
+      node.dataset.pinBaseOpacity = "1";
       node.style.opacity = "1";
       node.style.zIndex = "80";
       node.classList.remove("pin--ghost");
@@ -929,6 +1027,7 @@
       node.style.top = `${y - h / 2}px`;
       node.style.width = `${w}px`;
       node.style.height = `${h}px`;
+      node.dataset.pinBaseOpacity = ring.length ? "0.22" : "1";
       node.style.opacity = ring.length ? "0.22" : "1";
       node.style.zIndex = "5";
       if (scorePin(pin, q) === 0 && q) node.classList.add("pin--ghost");
@@ -943,6 +1042,7 @@
       document.body.classList.add("has-pin-focus");
       applyFocusLayout(focusedPinId);
       updateFocusPanel();
+      clampCameraToBounds();
       return;
     }
     viewport.classList.remove("has-focus");
@@ -951,6 +1051,7 @@
     const q = searchQuery.trim();
     if (q) applySearchLayout();
     else applyCloudLayout();
+    clampCameraToBounds();
   }
 
   function renderPins() {
@@ -1265,8 +1366,9 @@
     focusedPinId = null;
     searchQuery = "";
     searchInput.value = "";
-    camera = { x: 0, y: 0, z: 0.92 };
+    camera = { x: 0, y: 0, z: START_DOLLY };
     camTarget = { ...camera };
+    clampCameraToBounds();
     applyWorldTransform();
     applyPinParallax();
     persistCamera();
@@ -1279,17 +1381,15 @@
   function onWheel(e) {
     if (!foldersScreen.hidden) return;
     e.preventDefault();
-    const delta = -e.deltaY * 0.0038;
-    const nz = Math.min(9, Math.max(0.06, camTarget.z + delta));
-    const rect = viewport.getBoundingClientRect();
-    const mx = e.clientX - rect.left - rect.width / 2;
-    const my = e.clientY - rect.top - rect.height / 2;
-    const worldX = (mx - camTarget.x) / camTarget.z;
-    const worldY = (my - camTarget.y) / camTarget.z;
-    camTarget.x = mx - worldX * nz;
-    camTarget.y = my - worldY * nz;
+    const dollyStep = -e.deltaY * 1.55;
+    const db = getDollyBounds();
+    const nz = Math.min(db.max, Math.max(db.min, camera.z + dollyStep));
+    camera.z = nz;
     camTarget.z = nz;
-    bumpCameraAnim();
+    clampCameraToBounds();
+    applyWorldTransform();
+    applyPinParallax();
+    persistCamera();
   }
 
   function onFoldersPointerDown(e) {

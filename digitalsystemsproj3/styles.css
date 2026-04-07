@@ -26,6 +26,7 @@ html,
 body {
   margin: 0;
   height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
@@ -61,7 +62,7 @@ button {
 #app {
   position: relative;
   height: 100%;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .folder-corner-btn {
@@ -296,28 +297,26 @@ button {
   flex-shrink: 0;
 }
 
-.viewport {
+.viewport-clip {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  z-index: 0;
+}
+
+.viewport {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
   touch-action: none;
   cursor: grab;
-  perspective: 1400px;
-  perspective-origin: 50% 42%;
+  transform-style: preserve-3d;
+  perspective: 1100px;
+  perspective-origin: 50% 45%;
 }
 
 .viewport.is-dragging {
   cursor: grabbing;
-}
-
-.viewport.viewport--driving-camera .pin {
-  transition:
-    left 0.08s ease-out,
-    top 0.08s ease-out,
-    width 0.65s cubic-bezier(0.22, 1, 0.36, 1),
-    height 0.65s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.4s ease,
-    z-index 0.3s ease;
 }
 
 .world {
@@ -346,7 +345,7 @@ button {
   box-shadow: var(--shadow);
   transform-origin: center center;
   transform-style: preserve-3d;
-  backface-visibility: hidden;
+  backface-visibility: visible;
   transition:
     left 0.65s cubic-bezier(0.22, 1, 0.36, 1),
     top 0.65s cubic-bezier(0.22, 1, 0.36, 1),
