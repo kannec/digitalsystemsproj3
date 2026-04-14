@@ -154,6 +154,7 @@
   const focusTagGroups = el("focus-tag-groups");
   const focusNotes = el("focus-notes");
   const focusNotesBlock = el("focus-notes-block");
+  const btnDeleteSelected = el("btn-delete-selected");
 
   let taggingState = {
     objectUrl: null,
@@ -262,9 +263,9 @@
 
   function cloudPositionForIndex(i, id) {
     const golden = Math.PI * (3 - Math.sqrt(5));
-    const ring = 88 + (hashStr(id) % 36);
-    const spread = 1.18 + ((hashStr(id + "spr") % 40) / 100);
-    const r = ring * Math.pow(i + 1, 0.52) * spread;
+    const ring = 108 + (hashStr(id) % 36);
+    const spread = 1.36 + ((hashStr(id + "spr") % 40) / 100);
+    const r = ring * Math.pow(i + 1, 0.56) * spread;
     const theta = i * golden * 1.02 + (hashStr(id + "a") % 120) * 0.008;
     const jitterX = ((hashStr(id + "x") % 56) - 28) * 0.55;
     const jitterY = ((hashStr(id + "y") % 56) - 28) * 0.55;
@@ -722,6 +723,40 @@
     applyPinLayout();
   }
 
+  function deleteSelectedPins() {
+    if (!selectedIds.size) return;
+    const toDelete = new Set(selectedIds);
+    const removeNodes = Array.from(pinsLayer.querySelectorAll('.pin')).filter((node) =>
+      toDelete.has(node.dataset.id),
+    );
+    if (removeNodes.length) {
+      removeNodes.forEach((node) => node.classList.add('is-removing'));
+      btnDeleteSelected.disabled = true;
+      setTimeout(() => {
+        pins = pins.filter((pin) => !toDelete.has(pin.id));
+        folders.forEach((folder) => {
+          folder.pinIds = folder.pinIds.filter((id) => !toDelete.has(id));
+        });
+        selectedIds.clear();
+        persistPins();
+        persistFolders();
+        renderPins();
+        updateSelectBar();
+      }, 300);
+      return;
+    }
+
+    pins = pins.filter((pin) => !toDelete.has(pin.id));
+    folders.forEach((folder) => {
+      folder.pinIds = folder.pinIds.filter((id) => !toDelete.has(id));
+    });
+    selectedIds.clear();
+    persistPins();
+    persistFolders();
+    renderPins();
+    updateSelectBar();
+  }
+
   function setFocus(pinId) {
     focusedPinId = pinId;
     searchQuery = "";
@@ -1016,6 +1051,8 @@
     }
     bar.hidden = false;
     count.textContent = `${selectedIds.size} selected`;
+    el("btn-save-folder").disabled = selectedIds.size === 0;
+    btnDeleteSelected.disabled = selectedIds.size === 0;
   }
 
   function setSelectMode(on) {
@@ -1524,6 +1561,7 @@
     if (!selectedIds.size) return;
     openFolderModal();
   });
+  btnDeleteSelected.addEventListener("click", deleteSelectedPins);
   el("btn-clear-select").addEventListener("click", () => {
     selectedIds.clear();
     pinsLayer.querySelectorAll(".pin.is-selected").forEach((n) => n.classList.remove("is-selected"));

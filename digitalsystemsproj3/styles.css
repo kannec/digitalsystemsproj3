@@ -358,6 +358,12 @@ button {
   user-select: none;
 }
 
+.pin.is-removing {
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
 .pin img {
   display: block;
   width: 100%;
@@ -426,12 +432,12 @@ body.select-mode .pin__select {
 
 .focus-panel {
   position: fixed;
-  left: 50%;
-  top: 58%;
-  translate: -50% 0;
+  right: 18px;
+  top: 50%;
+  translate: 0 -50%;
   z-index: 28;
-  width: min(380px, calc(100vw - 32px));
-  max-height: min(42vh, 380px);
+  width: min(250px, calc(100vw - 32px));
+  max-height: min(68vh, 380px);
   overflow-y: auto;
   pointer-events: auto;
 }
@@ -459,6 +465,26 @@ body.select-mode .pin__select {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.focus-panel__delete {
+  position: absolute;
+  top: 8px;
+  right: 52px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: #ff4d5c;
+  color: white;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: none;
+}
+
+.focus-panel__delete:hover,
+.focus-panel__delete:focus-visible {
+  background: #e6364a;
 }
 
 .focus-panel__close:hover {
@@ -656,6 +682,20 @@ body.select-mode .dock__search {
   color: #fff;
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+.select-bar__danger {
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #ff4d5c;
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.select-bar__danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .select-bar__ghost {
