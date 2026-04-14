@@ -468,7 +468,7 @@
     });
   }
 
-  function openTagging({ src, editingPin } = {}) {
+  function openTagging({ src, editingPin, objectUrl } = {}) {
     if (!editingPin) {
       focusedPinId = null;
       activeFolderId = null;
@@ -486,7 +486,7 @@
     tagging.hidden = false;
     notesInput.value = "";
     taggingState = {
-      objectUrl: null,
+      objectUrl: editingPin ? null : objectUrl || null,
       tier1: [],
       tier2: [],
       tier1Pick: null,
@@ -637,13 +637,34 @@
     }
   }
 
-  function saveTagging() {
+  function ensureImageLoaded(img) {
+    if (img.complete && img.naturalWidth) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const onLoad = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error("Image failed to load"));
+      };
+      const cleanup = () => {
+        img.removeEventListener("load", onLoad);
+        img.removeEventListener("error", onError);
+      };
+      img.addEventListener("load", onLoad);
+      img.addEventListener("error", onError);
+    });
+  }
+
+  async function saveTagging() {
     let src = taggingPreview.src;
     if (!src) return;
     const tags = collectTagsFromTagging();
     const notes = notesInput.value.trim();
 
     if (!taggingState.editingId && taggingState.objectUrl) {
+      await ensureImageLoaded(taggingPreview);
       src = snapshotPreviewDataUrl();
     }
 
@@ -652,8 +673,10 @@
       if (pin) {
         pin.tags = tags;
         pin.notes = notes;
-        if (taggingState.objectUrl) pin.src = snapshotPreviewDataUrl();
-        else pin.src = src;
+        if (taggingState.objectUrl) {
+          await ensureImageLoaded(taggingPreview);
+          pin.src = snapshotPreviewDataUrl();
+        } else pin.src = src;
         if (taggingState.objectUrl && taggingPreview.naturalWidth) {
           const sz = pinDisplaySizeFromNatural(taggingPreview.naturalWidth, taggingPreview.naturalHeight);
           if (sz) {
@@ -1006,6 +1029,10 @@
         pin.h = sz.h;
         persistPins();
         applyPinLayout();
+      });
+      img.addEventListener("error", () => {
+        console.warn("Pin image failed to load:", pin.id, pin.src);
+        div.classList.add("pin--broken");
       });
       const sel = document.createElement("div");
       sel.className = "pin__select";
@@ -1489,8 +1516,7 @@
     fileInput.value = "";
     if (!f || !f.type.startsWith("image/")) return;
     const url = URL.createObjectURL(f);
-    taggingState.objectUrl = url;
-    openTagging({ src: url });
+    openTagging({ src: url, objectUrl: url });
   });
 
   el("tier1-refresh").addEventListener("click", refreshTier1);
@@ -1543,7 +1569,11 @@
     notesToggle.closest(".tagging__notes").classList.toggle("is-collapsed", notesBody.hidden);
   });
 
-  el("tagging-save").addEventListener("click", saveTagging);
+  el("tagging-save").addEventListener("click", () => {
+    saveTagging().catch((err) => {
+      console.error(err);
+    });
+  });
 
   el("btn-select").addEventListener("click", () => setSelectMode(!selectMode));
 
